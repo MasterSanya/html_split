@@ -17,6 +17,9 @@ def split_html_message(html: str, max_len: int) -> List[str]:
     fragments = []  # List to store the resulting fragments
     current_fragment = ""  # Current fragment being built
 
+    # Tags that are allowed to be split (block-level elements)
+    splittable_tags = {"p", "div", "span", "ul", "ol", "strong", "b", "i"}
+
     def add_to_fragment(content: str):
         """
         Adds content to the current fragment, or starts a new fragment if the length limit is exceeded.
@@ -43,22 +46,26 @@ def split_html_message(html: str, max_len: int) -> List[str]:
         Parameters:
         - element: A BeautifulSoup element or string.
         """
-        nonlocal current_fragment  # Ensure access to the variable
+        nonlocal current_fragment
         if isinstance(element, str):
             add_to_fragment(element)
         else:
-            # Convert the entire tag including its children to a string first
-            tag_as_string = str(element)
-            if len(tag_as_string) > max_len:
-                raise ValueError(f"Cannot split tag exceeding {
-                                 max_len} characters: {tag_as_string[:50]}...")
-
-            # If the full tag fits, add it directly
-            if len(current_fragment) + len(tag_as_string) > max_len:
-                fragments.append(current_fragment)
-                current_fragment = tag_as_string
+            # If the element is splittable and its length exceeds max_len, split its children
+            if element.name in splittable_tags:
+                for child in element.children:
+                    process_element(child)
             else:
-                current_fragment += tag_as_string
+                # Non-splittable tags must remain intact
+                tag_as_string = str(element)
+                if len(tag_as_string) > max_len:
+                    raise ValueError(f"Cannot split tag exceeding {
+                                     max_len} characters: {tag_as_string[:50]}...")
+                # Add the whole tag if it fits
+                if len(current_fragment) + len(tag_as_string) > max_len:
+                    fragments.append(current_fragment)
+                    current_fragment = tag_as_string
+                else:
+                    current_fragment += tag_as_string
 
     # Process the entire document
     for child in soup.children:
