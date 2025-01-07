@@ -1,6 +1,12 @@
 from bs4 import BeautifulSoup
 from typing import List
 
+# Set of block-level tags that can be closed and reopened
+BLOCK_TAGS = {"p", "b", "strong", "i", "ul", "ol", "div", "span"}
+
+# Set of inline tags that must not be split
+INLINE_TAGS = {"a"}
+
 
 def split_html_message(html: str, max_len: int) -> List[str]:
     """
@@ -14,64 +20,78 @@ def split_html_message(html: str, max_len: int) -> List[str]:
     - List[str]: A list of HTML fragments.
     """
     soup = BeautifulSoup(html, "html.parser")
-    fragments = []  # List to store the resulting fragments
-    current_fragment = ""  # Current fragment being built
-
-    # Tags that are allowed to be split (block-level elements)
-    splittable_tags = {"p", "div", "span", "ul", "ol", "strong", "b", "i"}
+    fragments = []
+    current_fragment = ""
+    open_tags_stack = []
 
     def add_to_fragment(content: str):
-        """
-        Adds content to the current fragment, or starts a new fragment if the length limit is exceeded.
-
-        Parameters:
-        - content (str): The content to add to the fragment.
-        """
         nonlocal current_fragment
         if len(content) > max_len:
             raise ValueError(f"Cannot split tag exceeding {
-                             max_len} characters: {content}")
+                             max_len} characters: {content[:50]}...")
 
-        # Start a new fragment if adding the content would exceed the max length
         if len(current_fragment) + len(content) > max_len:
-            fragments.append(current_fragment)
-            current_fragment = content
+            fragments.append(
+                current_fragment + ''.join(f'</{tag}>' for tag in reversed(open_tags_stack)))
+            current_fragment = ''.join(
+                f'<{tag}>' for tag in open_tags_stack) + content
         else:
             current_fragment += content
 
-    def process_element(element):
-        """
-        Recursively processes an HTML element and adds its content to the fragments.
-
-        Parameters:
-        - element: A BeautifulSoup element or string.
-        """
+    def split_text(text: str):
         nonlocal current_fragment
-        if isinstance(element, str):
-            add_to_fragment(element)
-        else:
-            # If the element is splittable and its length exceeds max_len, split its children
-            if element.name in splittable_tags:
-                for child in element.children:
-                    process_element(child)
+        while text:
+            available_space = max_len - len(current_fragment)
+            if len(text) <= available_space:
+                add_to_fragment(text)
+                break
             else:
-                # Non-splittable tags must remain intact
+                add_to_fragment(text[:available_space])
+                fragments.append(
+                    current_fragment + ''.join(f'</{tag}>' for tag in reversed(open_tags_stack)))
+                current_fragment = ''.join(
+                    f'<{tag}>' for tag in open_tags_stack)
+                text = text[available_space:]
+
+    def process_element(element):
+        nonlocal current_fragment
+
+        if isinstance(element, str):
+            split_text(element)
+        else:
+            tag_name = element.name
+
+            if tag_name in INLINE_TAGS:
                 tag_as_string = str(element)
                 if len(tag_as_string) > max_len:
                     raise ValueError(f"Cannot split tag exceeding {
                                      max_len} characters: {tag_as_string[:50]}...")
-                # Add the whole tag if it fits
-                if len(current_fragment) + len(tag_as_string) > max_len:
-                    fragments.append(current_fragment)
-                    current_fragment = tag_as_string
-                else:
-                    current_fragment += tag_as_string
+                add_to_fragment(tag_as_string)
+                return
 
-    # Process the entire document
+            # Handling block-level tags with correct closing and reopening
+            if tag_name in BLOCK_TAGS:
+                open_tags_stack.append(tag_name)
+                open_tag = f"<{tag_name}>"
+                close_tag = f"</{tag_name}>"
+                add_to_fragment(open_tag)
+
+                for child in element.children:
+                    process_element(child)
+                    if len(current_fragment) > max_len:
+                        fragments.append(current_fragment + close_tag)
+                        current_fragment = open_tag
+
+                open_tags_stack.pop()
+                add_to_fragment(close_tag)
+
+            else:
+                tag_as_string = str(element)
+                add_to_fragment(tag_as_string)
+
     for child in soup.children:
         process_element(child)
 
-    # Add the final fragment if there's remaining content
     if current_fragment:
         fragments.append(current_fragment)
 
